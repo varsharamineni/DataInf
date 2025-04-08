@@ -6,9 +6,11 @@ from torch.utils.data import DataLoader
 from transformers import (
     AutoModelForSequenceClassification,
     get_linear_schedule_with_warmup,
-    BitsAndBytesConfig,
     LlamaForCausalLM,
-    LlamaTokenizer
+    LlamaTokenizer,
+    AutoTokenizer,
+    AutoModelForCausalLM,
+    AutoModel
 )
 from peft import (
     LoraConfig,
@@ -167,32 +169,21 @@ class LORAEngineGeneration(object):
                 device="cuda"):
         self.base_path = base_path
         self.project_path = project_path
-        self.adapter_path = f"{self.project_path}/models/math_with_reason_13bf"
+        #self.adapter_path = "oxkitsune/Qwen2.5-Math-1.5B-SFT"
         self.dataset_name = dataset_name
         self.device=device
         self.load_pretrained_network()
         self.load_datasets()
 
     def load_pretrained_network(self):
-        # setup tokenizer
-        self.tokenizer = LlamaTokenizer.from_pretrained(self.base_path)
+        # Setup tokenizer
+        self.tokenizer = AutoTokenizer.from_pretrained(self.base_path)
         self.tokenizer.padding_side = "right"
         self.tokenizer.pad_token = self.tokenizer.eos_token
         self.tokenizer.pad_token_id = self.tokenizer.eos_token_id
 
-        # load a base model
-        quantization_config = BitsAndBytesConfig(load_in_8bit=True, load_in_4bit=False)
-        base_model = LlamaForCausalLM.from_pretrained(
-            self.base_path,
-            quantization_config=quantization_config,
-            torch_dtype=torch.bfloat16,
-            offload_folder="offload",
-            offload_state_dict=True,
-        )
-
-        # load a pre-trained model.
-        self.model = PeftModel.from_pretrained(base_model, self.adapter_path, is_trainable=True)
-        self.finetuned_config = LoraConfig.from_pretrained(pretrained_model_name_or_path=self.adapter_path)
+        # Load the base model (no quantization or offload needed)
+        self.model = AutoModelForCausalLM.from_pretrained(self.base_path, torch_dtype=torch.bfloat16)
 
     def load_datasets(self):
         self.train_dataset = Dataset.load_from_disk(f"{self.project_path}/datasets/{self.dataset_name}_train.hf")

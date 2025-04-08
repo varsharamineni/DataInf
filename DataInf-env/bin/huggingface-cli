@@ -1,4 +1,4 @@
-#!/leonardo/home/userexternal/vraminen/DataInf/DataInf-env/bin/python3.11
+#!/leonardo/home/userexternal/vraminen/DataInf/DataInf-env/bin/python
 # -*- coding: utf-8 -*-
 import re
 import sys
