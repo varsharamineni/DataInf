@@ -177,40 +177,59 @@ class LORAEngineGeneration(object):
 
     def load_pretrained_network(self):
         # Setup tokenizer
-        self.tokenizer = AutoTokenizer.from_pretrained(self.base_path)
+        self.tokenizer = AutoTokenizer.from_pretrained(self.base_path, trust_remote_code=True)
         self.tokenizer.padding_side = "right"
         self.tokenizer.pad_token = self.tokenizer.eos_token
         self.tokenizer.pad_token_id = self.tokenizer.eos_token_id
 
         # Load the base model (no quantization or offload needed)
-        self.model = AutoModelForCausalLM.from_pretrained(self.base_path, torch_dtype=torch.bfloat16)
+        self.model = AutoModelForCausalLM.from_pretrained(self.base_path, torch_dtype=torch.bfloat16, device_map = 'auto')
 
     def load_datasets(self):
         self.train_dataset = Dataset.load_from_disk(f"{self.project_path}/datasets/{self.dataset_name}_train.hf")
         self.validation_dataset = Dataset.load_from_disk(f"{self.project_path}/datasets/{self.dataset_name}_test.hf")
 
     def create_tokenized_datasets(self):
+        # Tokenization function using 'text' as the input column
         tokenize_func = lambda x: self.tokenizer(
-            x["prompt"], truncation=True, padding=True, max_length=128, return_tensors="pt" # text should be more appropritate
+            x["text"], truncation=True, padding=True, max_length=128, return_tensors="pt" 
         ).to(self.device)
 
+        # Define the columns to remove based on the dataset name
         if 'with_reason' in self.dataset_name:
-            column_list=["text", "answer", "variation", "prompt", "reason"]
+            column_list = ["text", "answer", "variation", "prompt", "reason"]
         else:
-            column_list=["text", "answer", "variation", "prompt"]
+            column_list = ["text", "answer", "variation", "prompt"]
 
-        tokenized_datasets=dict()
+        # Initialize a dictionary for tokenized datasets
+        tokenized_datasets = dict()
+
+        # Check which columns exist in the dataset and remove only those
+        existing_columns_to_remove = [col for col in column_list if col in self.train_dataset.column_names]
+
+        # Apply the tokenization and remove the columns
         tokenized_datasets["train"] = self.train_dataset.map(
             tokenize_func,
             batched=True,
-            remove_columns=column_list,
+            remove_columns=existing_columns_to_remove,
         )
+        
         tokenized_datasets["validation"] = self.validation_dataset.map(
             tokenize_func,
             batched=True,
-            remove_columns=column_list,
+            remove_columns=existing_columns_to_remove,
         )
-        collate_fn = lambda x: self.tokenizer.pad(x, padding="longest", return_tensors="pt")
+
+        # Collate function for padding
+        #collate_fn = lambda x: self.tokenizer.pad(x, padding="longest", return_tensors="pt")
+        
+                # Collate function for padding
+        def collate_fn(batch):
+            # Filter out unnecessary columns (e.g., 'meta') that might cause issues
+            batch = [{key: value for key, value in example.items() if key in ['input_ids', 'attention_mask']} for example in batch]
+    
+            # Ensure all batches have consistent tensor shapes and return tensors
+            return self.tokenizer.pad(batch, padding="longest", return_tensors="pt")
 
         return tokenized_datasets, collate_fn
 
@@ -227,12 +246,24 @@ class LORAEngineGeneration(object):
         self.model.eval()
         tr_grad_dict = {}
         for step, batch in enumerate(tqdm(train_dataloader_stochastic)):
+            device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
             self.model.zero_grad() # zeroing out gradient
             batch['labels'] = batch['input_ids']
-            batch.to(self.device)
+            
+            print("input_ids device:", batch['input_ids'].device)
+            #print(self.model)
+
+            print("embedding weight device:", self.model.gpt_neox.embed_in.weight.device)
+            #print("embedding weight device:", self.model.embed_in.weight.device)
+            
+            batch = {k: v.to('cuda:0') if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
+
+            #batch.to(self.device)
             outputs = self.model(**batch)
             loss = outputs.loss
             loss.backward()
+            
+            
             
             grad_dict={}
             for k, v in self.model.named_parameters():
